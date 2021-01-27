@@ -1,9 +1,12 @@
-use base64::{self, URL_SAFE_NO_PAD};
 use crate::error::WebPushError;
 use crate::message::WebPushPayload;
-use ring::rand::SecureRandom;
-use ring::{aead::{self, BoundKey}, agreement, hkdf, rand};
 use crate::vapid::VapidSignature;
+use base64::{self, URL_SAFE_NO_PAD};
+use ring::rand::SecureRandom;
+use ring::{
+    aead::{self, BoundKey},
+    agreement, hkdf, rand,
+};
 
 pub enum ContentEncoding {
     AesGcm,
@@ -86,10 +89,10 @@ impl<'a> HttpEce<'a> {
     ) -> HttpEce<'a> {
         HttpEce {
             rng: rand::SystemRandom::new(),
-            peer_public_key: peer_public_key,
-            peer_secret: peer_secret,
-            encoding: encoding,
-            vapid_signature: vapid_signature,
+            peer_public_key,
+            peer_secret,
+            encoding,
+            vapid_signature,
         }
     }
 
@@ -107,7 +110,8 @@ impl<'a> HttpEce<'a> {
         let mut salt_bytes = [0u8; 16];
 
         self.rng.fill(&mut salt_bytes)?;
-        let peer_public_key = agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, self.peer_public_key);
+        let peer_public_key =
+            agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, self.peer_public_key);
 
         agreement::agree_ephemeral(
             private_key,
@@ -171,7 +175,7 @@ impl<'a> HttpEce<'a> {
     ) -> Result<(), WebPushError> {
         let mut context = Vec::with_capacity(140);
 
-        context.extend_from_slice("P-256\0".as_bytes());
+        context.extend_from_slice(b"P-256\0");
         context.push((self.peer_public_key.len() >> 8) as u8);
         context.push((self.peer_public_key.len() & 0xff) as u8);
         context.extend_from_slice(self.peer_public_key);
@@ -184,12 +188,12 @@ impl<'a> HttpEce<'a> {
 
         let EceKey(prk) = client_auth_secret
             .extract(shared_secret)
-            .expand(&[&"Content-Encoding: auth\0".as_bytes()], EceKey(32))
+            .expand(&[b"Content-Encoding: auth\0"], EceKey(32))
             .unwrap()
             .into();
 
         let mut cek_info = Vec::with_capacity(165);
-        cek_info.extend_from_slice("Content-Encoding: aesgcm\0".as_bytes());
+        cek_info.extend_from_slice(b"Content-Encoding: aesgcm\0");
         cek_info.extend_from_slice(&context);
 
         let EceKey(content_encryption_key) = salt
@@ -199,7 +203,7 @@ impl<'a> HttpEce<'a> {
             .into();
 
         let mut nonce_info = Vec::with_capacity(164);
-        nonce_info.extend_from_slice("Content-Encoding: nonce\0".as_bytes());
+        nonce_info.extend_from_slice(b"Content-Encoding: nonce\0");
         nonce_info.extend_from_slice(&context);
 
         let EceKey(nonce_bytes) = salt
@@ -235,10 +239,10 @@ fn front_pad(payload: &[u8], output: &mut [u8]) {
 
 #[cfg(test)]
 mod tests {
-    use base64::{self, URL_SAFE, URL_SAFE_NO_PAD};
     use crate::error::WebPushError;
     use crate::http_ece::{front_pad, ContentEncoding, HttpEce};
     use crate::vapid::VapidSignature;
+    use base64::{self, URL_SAFE, URL_SAFE_NO_PAD};
 
     #[test]
     fn test_payload_too_big() {
@@ -367,7 +371,10 @@ mod tests {
         front_pad(content.as_bytes(), &mut output);
 
         assert_eq!(
-            vec![0, 22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110, 97, 117, 107, 105, 111],
+            vec![
+                0, 22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110, 97,
+                117, 107, 105, 111
+            ],
             output
         );
     }

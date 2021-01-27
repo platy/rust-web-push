@@ -1,7 +1,5 @@
-use base64;
 use crate::error::WebPushError;
 use crate::http_ece::{ContentEncoding, HttpEce};
-use hyper::Uri;
 use crate::vapid::VapidSignature;
 
 /// Encryption keys from the client.
@@ -40,12 +38,6 @@ impl SubscriptionInfo {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum WebPushService {
-    Firebase,
-    Autopush,
-}
-
 /// The push content payload, already in an encrypted form.
 #[derive(Debug, PartialEq)]
 pub struct WebPushPayload {
@@ -60,19 +52,13 @@ pub struct WebPushPayload {
 /// Everything needed to send a push notification to the user.
 #[derive(Debug)]
 pub struct WebPushMessage {
-    /// When not using VAPID, certain browsers need a Firebase account key for
-    /// sending a notification.
-    pub gcm_key: Option<String>,
     /// The endpoint URI where to send the payload.
-    pub endpoint: Uri,
+    pub endpoint: String,
     /// Time to live, how long the message should wait in the server if user is
     /// not online. Some services require this value to be set.
     pub ttl: u32,
     /// The encrypted request payload, if sending any data.
     pub payload: Option<WebPushPayload>,
-    /// The service type where to connect. Firebase when not using VAPID with
-    /// Chrome-based browsers. Data is in JSON format instead of binary.
-    pub service: WebPushService,
 }
 
 struct WebPushPayloadBuilder<'a> {
@@ -83,7 +69,6 @@ struct WebPushPayloadBuilder<'a> {
 /// The main class for creating a notification payload.
 pub struct WebPushMessageBuilder<'a> {
     subscription_info: &'a SubscriptionInfo,
-    gcm_key: Option<&'a str>,
     payload: Option<WebPushPayloadBuilder<'a>>,
     ttl: u32,
     vapid_signature: Option<VapidSignature>,
@@ -98,9 +83,8 @@ impl<'a> WebPushMessageBuilder<'a> {
         subscription_info: &'a SubscriptionInfo,
     ) -> Result<WebPushMessageBuilder<'a>, WebPushError> {
         Ok(WebPushMessageBuilder {
-            subscription_info: subscription_info,
+            subscription_info,
             ttl: 2_419_200,
-            gcm_key: None,
             payload: None,
             vapid_signature: None,
         })
@@ -111,11 +95,6 @@ impl<'a> WebPushMessageBuilder<'a> {
     /// delivery.
     pub fn set_ttl(&mut self, ttl: u32) {
         self.ttl = ttl;
-    }
-
-    /// For Google's push service, one must provide an API key from Firebase console.
-    pub fn set_gcm_key(&mut self, gcm_key: &'a str) {
-        self.gcm_key = Some(gcm_key);
     }
 
     /// Add a VAPID signature to the request. To be generated with the
@@ -129,23 +108,14 @@ impl<'a> WebPushMessageBuilder<'a> {
     pub fn set_payload(&mut self, encoding: ContentEncoding, payload: &'a [u8]) {
         self.payload = Some(WebPushPayloadBuilder {
             content: payload,
-            encoding: encoding,
+            encoding,
         });
     }
 
     /// Builds and if set, encrypts the payload. Any errors will be `Undefined`, meaning
     /// something was wrong in the given public key or authentication.
     pub fn build(self) -> Result<WebPushMessage, WebPushError> {
-        let endpoint: Uri = self.subscription_info.endpoint.parse()?;
-
-        let service = match self.vapid_signature {
-            Some(_) => WebPushService::Autopush,
-            _ => match endpoint.host() {
-                Some("android.googleapis.com") => WebPushService::Firebase,
-                Some("fcm.googleapis.com") => WebPushService::Firebase,
-                _ => WebPushService::Autopush,
-            },
-        };
+        let endpoint = self.subscription_info.endpoint.clone();
 
         if let Some(payload) = self.payload {
             let p256dh =
@@ -155,19 +125,15 @@ impl<'a> WebPushMessageBuilder<'a> {
             let http_ece = HttpEce::new(payload.encoding, &p256dh, &auth, self.vapid_signature);
 
             Ok(WebPushMessage {
-                gcm_key: self.gcm_key.map(|k| k.to_string()),
-                endpoint: endpoint,
+                endpoint,
                 ttl: self.ttl,
                 payload: Some(http_ece.encrypt(payload.content)?),
-                service: service,
             })
         } else {
             Ok(WebPushMessage {
-                gcm_key: self.gcm_key.map(|k| k.to_string()),
-                endpoint: endpoint,
+                endpoint,
                 ttl: self.ttl,
                 payload: None,
-                service: service,
             })
         }
     }

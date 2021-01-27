@@ -1,7 +1,4 @@
 use base64::DecodeError;
-use chrono;
-use http::uri::InvalidUri;
-use native_tls;
 use openssl::error::ErrorStack;
 use ring::error;
 use serde_json::error::Error as JsonError;
@@ -35,9 +32,6 @@ pub enum WebPushError {
     SslError,
     /// Error in reading a file
     IoError,
-    /// Make sure the message was addressed to a registration token whose
-    /// package name matches the value passed in the request (Google).
-    InvalidPackageName,
     /// The TTL value provided was not valid or was not provided
     InvalidTtl,
     /// The request was missing required crypto keys
@@ -47,6 +41,51 @@ pub enum WebPushError {
     /// Corrupted response data
     InvalidResponse,
     Other(String),
+}
+
+// impl fmt::Display for WebPushError {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         <Self as fmt::Debug>::fmt(self, f)
+//     }
+// }
+
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
+pub struct ErrorInfo {
+    code: u16,
+    errno: u16,
+    pub error: String,
+    message: String,
+}
+
+#[cfg(feature = "hyper")]
+impl From<hyper::Error> for WebPushError {
+    fn from(err: hyper::Error) -> Self {
+        debug!("{}", err);
+        Self::Unspecified
+    }
+}
+
+#[cfg(feature = "ureq")]
+impl From<ureq::Error> for WebPushError {
+    fn from(err: ureq::Error) -> Self {
+        match err {
+            ureq::Error::Status(401, _) => WebPushError::Unauthorized,
+            ureq::Error::Status(410, _) => WebPushError::EndpointNotValid,
+            ureq::Error::Status(404, _) => WebPushError::EndpointNotFound,
+            ureq::Error::Status(413, _) => WebPushError::PayloadTooLarge,
+            ureq::Error::Status(400, response) => match response.into_json::<ErrorInfo>() {
+                Ok(error_info) => WebPushError::BadRequest(Some(error_info.error)),
+                Err(_) => WebPushError::BadRequest(None),
+            },
+            ureq::Error::Status(code, response) if code >= 500 => {
+                let retry_after = response
+                    .header("Retry-After")
+                    .and_then(|ra| retry_after_from_str(ra));
+                WebPushError::ServerError(retry_after)
+            }
+            err => WebPushError::Other(err.to_string()),
+        }
+    }
 }
 
 impl From<JsonError> for WebPushError {
@@ -61,27 +100,9 @@ impl From<FromUtf8Error> for WebPushError {
     }
 }
 
-impl From<InvalidUri> for WebPushError {
-    fn from(_: InvalidUri) -> WebPushError {
-        WebPushError::InvalidUri
-    }
-}
-
 impl From<error::Unspecified> for WebPushError {
     fn from(_: error::Unspecified) -> WebPushError {
         WebPushError::Unspecified
-    }
-}
-
-impl From<hyper::error::Error> for WebPushError {
-    fn from(_: hyper::error::Error) -> Self {
-        Self::Unspecified
-    }
-}
-
-impl From<native_tls::Error> for WebPushError {
-    fn from(_: native_tls::Error) -> WebPushError {
-        WebPushError::TlsError
     }
 }
 
@@ -116,7 +137,6 @@ impl WebPushError {
             WebPushError::EndpointNotFound => "endpoint_not_found",
             WebPushError::PayloadTooLarge => "payload_too_large",
             WebPushError::TlsError => "tls_error",
-            WebPushError::InvalidPackageName => "invalid_package_name",
             WebPushError::InvalidTtl => "invalid_ttl",
             WebPushError::InvalidResponse => "invalid_response",
             WebPushError::MissingCryptoKeys => "missing_crypto_keys",
@@ -131,36 +151,30 @@ impl WebPushError {
 impl Error for WebPushError {
     fn description(&self) -> &str {
         match *self {
-            WebPushError::Unspecified =>
-                "An unknown error happened encrypting the message",
-            WebPushError::Unauthorized =>
-                "Please provide valid credentials to send the notification",
-            WebPushError::BadRequest(_) =>
-                "Request was badly formed",
-            WebPushError::ServerError(_) =>
-                "Server was unable to process the request, please try again later",
-            WebPushError::PayloadTooLarge =>
-                "Maximum allowed payload size is 3070 characters",
-            WebPushError::InvalidUri =>
-                "The provided URI is invalid",
-            WebPushError::NotImplemented =>
-                "The feature is not implemented yet",
-            WebPushError::EndpointNotValid =>
-                "The URL specified is no longer valid and should no longer be used",
-            WebPushError::EndpointNotFound =>
-                "The URL specified is invalid and should not be used again",
-            WebPushError::TlsError =>
-                "Could not initialize a TLS connection",
-            WebPushError::SslError =>
-                "Error signing with SSL",
-            WebPushError::IoError =>
-                "Error opening a file",
-            WebPushError::InvalidPackageName =>
-                "Make sure the message was addressed to a registration token whose package name matches the value passed in the request.",
+            WebPushError::Unspecified => "An unknown error happened encrypting the message",
+            WebPushError::Unauthorized => {
+                "Please provide valid credentials to send the notification"
+            }
+            WebPushError::BadRequest(_) => "Request was badly formed",
+            WebPushError::ServerError(_) => {
+                "Server was unable to process the request, please try again later"
+            }
+            WebPushError::PayloadTooLarge => "Maximum allowed payload size is 3070 characters",
+            WebPushError::InvalidUri => "The provided URI is invalid",
+            WebPushError::NotImplemented => "The feature is not implemented yet",
+            WebPushError::EndpointNotValid => {
+                "The URL specified is no longer valid and should no longer be used"
+            }
+            WebPushError::EndpointNotFound => {
+                "The URL specified is invalid and should not be used again"
+            }
+            WebPushError::TlsError => "Could not initialize a TLS connection",
+            WebPushError::SslError => "Error signing with SSL",
+            WebPushError::IoError => "Error opening a file",
             WebPushError::InvalidTtl => "The TTL value provided was not valid or was not provided",
             WebPushError::InvalidResponse => "The response data couldn't be parses",
-            WebPushError::MissingCryptoKeys  => "The request is missing cryptographic keys",
-            WebPushError::InvalidCryptoKeys  => "The request is having invalid cryptographic keys",
+            WebPushError::MissingCryptoKeys => "The request is missing cryptographic keys",
+            WebPushError::InvalidCryptoKeys => "The request is having invalid cryptographic keys",
             WebPushError::Other(_) => "An unknown error when connecting the notification service",
         }
     }
@@ -172,25 +186,22 @@ impl Error for WebPushError {
 
 impl fmt::Display for WebPushError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.description())
+        write!(f, "WebPushError: {}", self)
     }
 }
 
-pub struct RetryAfter;
-impl RetryAfter {
-    pub fn from_str(header_value: &str) -> Option<Duration> {
-        if let Ok(seconds) = header_value.parse::<u64>() {
-            Some(Duration::from_secs(seconds))
-        } else {
-            chrono::DateTime::parse_from_rfc2822(header_value)
-                .map(|date_time| {
-                    let systime: SystemTime = date_time.into();
+pub fn retry_after_from_str(header_value: &str) -> Option<Duration> {
+    if let Ok(seconds) = header_value.parse::<u64>() {
+        Some(Duration::from_secs(seconds))
+    } else {
+        time::OffsetDateTime::parse(header_value, "%a, %d %b %Y %H:%M:%S %z")
+            .map(|date_time| {
+                let systime: SystemTime = date_time.into();
 
-                    systime
-                        .duration_since(SystemTime::now())
-                        .unwrap_or_else(|_| Duration::new(0, 0))
-                })
-                .ok()
-        }
+                systime
+                    .duration_since(SystemTime::now())
+                    .unwrap_or_else(|_| Duration::new(0, 0))
+            })
+            .ok()
     }
 }

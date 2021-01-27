@@ -8,7 +8,12 @@ Web push notification sender.
 
 ## Requirements
 
-Needs a Tokio executor version 0.2 or later and Rust compiler version 1.39.0 or later.
+MSRV??
+
+A feature flag needs to be selected to choose which http client to use, either:
+
+- `http-hyper` - using the async `hyper` client which requires a `tokio` runtime
+- `http-ureq` - using the blocking `ureq` client which will block
 
 Documentation
 -------------
@@ -30,15 +35,11 @@ file. It should have the following content:
 }
 ```
 
-Google has
-[good instructions](https://developers.google.com/web/updates/2015/03/push-notifications-on-the-open-web) for
+Google has [good instructions](https://developers.google.com/web/updates/2015/03/push-notifications-on-the-open-web) for
 building a frontend to receive notifications.
 
 Store the subscription info to `examples/test.json` and send a notification with
-`cargo run --example simple_send -- -f examples/test.json -p "It works!"`. If
-using Google Chrome, you need to register yourself
-into [Firebase](https://firebase.google.com/) and provide a GCM API Key with
-parameter `-k GCM_API_KEY`.
+`cargo run --example simple_send -- -f examples/test.json -p "It works!"`.
 
 Examples
 --------
@@ -51,8 +52,7 @@ VAPID
 -----
 
 VAPID authentication prevents unknown sources sending notifications to the
-client and allows sending notifications to Chrome without signing in to Firebase
-and providing a GCM API key.
+client and allows sending notifications without any third party account.
 
 The private key to be used by the server can be generated with OpenSSL:
 
@@ -77,7 +77,7 @@ Overview
 Currently implements
 [HTTP-ECE Draft-3](https://datatracker.ietf.org/doc/draft-ietf-httpbis-encryption-encoding/03/?include_text=1)
 content encryption for notification payloads. The client requires
-[Tokio](https://tokio.rs) for asynchronious requests. The modular design allows
+[Tokio](https://tokio.rs) for asynchronious requests if using the `async-hyper` feature. The modular design allows
 an easy extension for the upcoming aes128gcm when the browsers are getting
 support for it.
 

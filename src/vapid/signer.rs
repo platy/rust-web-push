@@ -1,14 +1,12 @@
-use base64::{self, URL_SAFE_NO_PAD};
 use crate::error::WebPushError;
-use hyper::Uri;
+use crate::vapid::VapidKey;
+use base64::{self, URL_SAFE_NO_PAD};
 use openssl::hash::MessageDigest;
 use openssl::pkey::PKey;
 use openssl::sign::Signer as SslSigner;
-use serde_json;
 use serde_json::{Number, Value};
 use std::collections::BTreeMap;
-use time;
-use crate::vapid::VapidKey;
+use url::Url;
 
 lazy_static! {
     static ref JWT_HEADERS: String = base64::encode_config(
@@ -45,21 +43,18 @@ impl VapidSigner {
     /// overwritten by adding the `aud` and `exp` claims.
     pub fn sign(
         key: VapidKey,
-        endpoint: &Uri,
+        endpoint: &str,
         mut claims: BTreeMap<&str, Value>,
     ) -> Result<VapidSignature, WebPushError> {
         if !claims.contains_key("aud") {
-            let audience = format!(
-                "{}://{}",
-                endpoint.scheme_str().unwrap(),
-                endpoint.host().unwrap()
-            );
+            let endpoint: Url = Url::parse(endpoint).unwrap();
+            let audience = format!("{}://{}", endpoint.scheme(), endpoint.host().unwrap());
             claims.insert("aud", Value::String(audience));
         }
 
         if !claims.contains_key("exp") {
-            let expiry = time::now_utc() + time::Duration::hours(12);
-            let number = Number::from(expiry.to_timespec().sec);
+            let expiry = time::OffsetDateTime::now_utc() + time::Duration::hours(12);
+            let number = Number::from(expiry.unix_timestamp());
             claims.insert("exp", Value::Number(number));
         }
 

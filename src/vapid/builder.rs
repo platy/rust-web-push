@@ -1,16 +1,13 @@
 use crate::error::WebPushError;
-use hyper::Uri;
 use crate::message::SubscriptionInfo;
+use crate::vapid::{VapidKey, VapidSignature, VapidSigner};
 use openssl::ec::EcKey;
 use openssl::pkey::Private;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::io::Read;
-use crate::vapid::{VapidKey, VapidSignature, VapidSigner};
 
-/// A VAPID signature builder for generating an optional signature to the
-/// request. With a given signature, one can pass the registration to Google's
-/// FCM service. And prevent unauthorized notifications to be sent to the client.
+/// A VAPID signature builder for generating a signature for signing a request payload.
 ///
 /// To communicate with the site, one needs to generate a private key to keep in
 /// the server and derive a public key from the generated private key to the
@@ -117,20 +114,21 @@ impl<'a> VapidSignatureBuilder<'a> {
 
     /// Builds a signature to be used in [WebPushMessageBuilder](struct.WebPushMessageBuilder.html).
     pub fn build(self) -> Result<VapidSignature, WebPushError> {
-        let endpoint: Uri = self.subscription_info.endpoint.parse()?;
+        let endpoint = self.subscription_info.endpoint.clone();
+        println!("endpoint : {}", endpoint);
         let signature = VapidSigner::sign(self.key, &endpoint, self.claims)?;
 
         Ok(signature)
     }
 
-    fn from_ec(
+    pub fn from_ec(
         ec_key: EcKey<Private>,
         subscription_info: &'a SubscriptionInfo,
     ) -> VapidSignatureBuilder<'a> {
         VapidSignatureBuilder {
             claims: BTreeMap::new(),
             key: VapidKey::new(ec_key),
-            subscription_info: subscription_info,
+            subscription_info,
         }
     }
 }
@@ -138,9 +136,9 @@ impl<'a> VapidSignatureBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use crate::message::SubscriptionInfo;
+    use crate::vapid::VapidSignatureBuilder;
     use serde_json;
     use std::fs::File;
-    use crate::vapid::VapidSignatureBuilder;
 
     lazy_static! {
         static ref PRIVATE_PEM: File = File::open("resources/vapid_test_key.pem").unwrap();

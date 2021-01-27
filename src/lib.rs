@@ -4,13 +4,12 @@
 //! content payload encryption it uses the [Encrypted Content-Encoding for HTTP, draft 3](https://datatracker.ietf.org/doc/draft-ietf-httpbis-encryption-encoding/03/?include_text=1).
 //! The client is asynchronious and uses [Tokio](https://tokio.rs) with futures.
 //!
-//! # Example
+//! # Example with `features=["http-ureq"]`
 //!
 //! ```no_run
 //! # use web_push::*;
 //! # use base64::URL_SAFE;
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+//! # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 //! let endpoint = "https://updates.push.services.mozilla.com/wpush/v1/...";
 //! let p256dh = base64::decode_config("key_from_browser_as_base64", URL_SAFE)?;
 //! let auth = base64::decode_config("auth_from_browser_as_base64", URL_SAFE)?;
@@ -27,22 +26,25 @@
 //!
 //! let client = WebPushClient::new();
 //!
-//! let response = client.send(builder.build()?).await?;
+//! let response = client.send(builder.build()?)?;
 //! println!("Got response: {:?}", response);
 //! # Ok(())
 //! # }
 //! ```
 
-#[macro_use] extern crate serde_derive;
-#[macro_use] extern crate lazy_static;
-#[macro_use] extern crate serde_json;
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate serde_derive;
+#[macro_use]
+extern crate lazy_static;
+#[macro_use]
+extern crate serde_json;
+#[macro_use]
+extern crate log;
 
 mod client;
 mod error;
 mod http_ece;
 mod message;
-mod services;
 mod vapid;
 
 pub use crate::client::WebPushClient;

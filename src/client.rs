@@ -1,87 +1,153 @@
+#[cfg(feature = "ureq")]
+use ureq::Agent;
+
+use crate::error::WebPushError;
+use crate::message::WebPushMessage;
+
+#[cfg(feature = "hyper")]
+use futures::stream::StreamExt;
+#[cfg(feature = "hyper")]
 use hyper::{
     client::{Client, HttpConnector},
-    Body, Request as HttpRequest,
+    header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER},
+    Request, StatusCode,
 };
-use futures::stream::StreamExt;
-use crate::error::{RetryAfter, WebPushError};
-use http::header::{RETRY_AFTER, CONTENT_LENGTH};
+#[cfg(feature = "hyper")]
 use hyper_tls::HttpsConnector;
-use crate::message::{WebPushMessage, WebPushService};
-use crate::services::{autopush, firebase};
-use std::future::Future;
 
-/// An async client for sending the notification payload.
+/// An client for sending the notification payload.
 pub struct WebPushClient {
+    #[cfg(feature = "ureq")]
+    client: Agent,
+    #[cfg(feature = "hyper")]
     client: Client<HttpsConnector<HttpConnector>>,
 }
 
 impl WebPushClient {
     pub fn new() -> WebPushClient {
-        let mut builder = Client::builder();
-        builder.keep_alive(true);
-
         WebPushClient {
-            client: builder.build(HttpsConnector::new()),
+            #[cfg(feature = "ureq")]
+            client: Agent::new(),
+            #[cfg(feature = "hyper")]
+            client: Client::builder().build(HttpsConnector::new()),
         }
     }
 
-    /// Sends a notification. Never times out.
-    pub fn send(&self, message: WebPushMessage) -> impl Future<Output = Result<(), WebPushError>> + 'static {
-        let service = message.service.clone();
+    #[cfg(feature = "ureq")]
+    /// Sends a notification. Blocking. Never times out.
+    pub fn send(&self, message: WebPushMessage) -> Result<(), WebPushError> {
+        let mut builder = self
+            .client
+            .post(&message.endpoint)
+            .set("TTL", &message.ttl.to_string());
 
-        let request: HttpRequest<Body> = match service {
-            WebPushService::Firebase => firebase::build_request(message),
-            _ => autopush::build_request(message),
+        let body = if let Some(payload) = message.payload {
+            builder = builder
+                .set("Content-Encoding", payload.content_encoding)
+                .set(
+                    "Content-Length",
+                    &format!("{}", payload.content.len() as u64),
+                )
+                .set("Content-Type", "application/octet-stream");
+
+            for (k, v) in payload.crypto_headers.into_iter() {
+                let v: &str = v.as_ref();
+                builder = builder.set(k, v);
+            }
+
+            payload.content
+        } else {
+            vec![]
         };
+        let response = builder.send_bytes(&body);
 
-        trace!("Request: {:?}", request);
+        trace!("Response: {:?}", response);
+        Ok(())
+    }
 
-        let requesting = self.client.request(request);
+    #[cfg(feature = "hyper")]
+    /// Sends a notification. Asynchronous. Never times out.
+    pub async fn send(&self, message: WebPushMessage) -> Result<(), WebPushError> {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(message.endpoint)
+            .header("TTL", format!("{}", message.ttl).as_bytes());
 
-        async move {
-            let response = requesting.await?;
-            trace!("Response: {:?}", response);
+        let request = if let Some(payload) = message.payload {
+            builder = builder
+                .header(CONTENT_ENCODING, payload.content_encoding)
+                .header(
+                    CONTENT_LENGTH,
+                    format!("{}", payload.content.len() as u64).as_bytes(),
+                )
+                .header(CONTENT_TYPE, "application/octet-stream");
 
-            let retry_after = response
-                .headers()
-                .get(RETRY_AFTER)
-                .and_then(|ra| ra.to_str().ok())
-                .and_then(|ra| RetryAfter::from_str(ra));
-
-            let response_status = response.status();
-            trace!("Response status: {}", response_status);
-
-            let content_length: usize = response
-                .headers()
-                .get(CONTENT_LENGTH)
-                .and_then(|s| s.to_str().ok())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-
-            let mut body: Vec<u8> = Vec::with_capacity(content_length);
-            let mut chunks = response.into_body();
-
-            while let Some(chunk) = chunks.next().await {
-                body.extend_from_slice(&chunk?);
+            for (k, v) in payload.crypto_headers.into_iter() {
+                let v: &str = v.as_ref();
+                builder = builder.header(k, v);
             }
-            trace!("Body: {:?}", body);
 
-            trace!("Body text: {:?}", std::str::from_utf8(&body));
+            builder.body(payload.content.into()).unwrap()
+        } else {
+            builder.body("".into()).unwrap()
+        };
+        trace!("request headers {:?}", request.headers());
 
-            let response = match service {
-                WebPushService::Firebase => {
-                    firebase::parse_response(response_status, body.to_vec())
-                }
-                _ => autopush::parse_response(response_status, body.to_vec()),
-            };
+        let response = self.client.request(request).await?;
 
-            debug!("Response: {:?}", response);
+        trace!("response status {}", response.status());
 
-            if let Err(WebPushError::ServerError(None)) = response {
+        match response.status() {
+            status if status.is_success() => Ok(()),
+            status if status.is_server_error() => {
+                let retry_after = response
+                    .headers()
+                    .get(RETRY_AFTER)
+                    .and_then(|s| s.to_str().ok())
+                    .and_then(|ra| crate::error::retry_after_from_str(ra));
                 Err(WebPushError::ServerError(retry_after))
-            } else {
-                Ok(response?)
             }
+
+            StatusCode::UNAUTHORIZED => Err(WebPushError::Unauthorized),
+            StatusCode::GONE => Err(WebPushError::EndpointNotValid),
+            StatusCode::NOT_FOUND => Err(WebPushError::EndpointNotFound),
+            StatusCode::PAYLOAD_TOO_LARGE => Err(WebPushError::PayloadTooLarge),
+
+            StatusCode::BAD_REQUEST => {
+                let content_length: usize = response
+                    .headers()
+                    .get(CONTENT_LENGTH)
+                    .and_then(|s| s.to_str().ok())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+
+                let mut body: Vec<u8> = Vec::with_capacity(content_length);
+                let mut chunks = response.into_body();
+
+                while let Some(chunk) = chunks.next().await {
+                    body.extend_from_slice(&chunk?);
+                }
+
+                match String::from_utf8(body) {
+                    Err(_) => Err(WebPushError::BadRequest(None)),
+                    Ok(body_str) => {
+                        match serde_json::from_str::<crate::error::ErrorInfo>(&body_str) {
+                            Ok(error_info) => Err(WebPushError::BadRequest(Some(error_info.error))),
+                            Err(_) if body_str != "" => {
+                                Err(WebPushError::BadRequest(Some(body_str)))
+                            }
+                            Err(_) => Err(WebPushError::BadRequest(None)),
+                        }
+                    }
+                }
+            }
+
+            e => Err(WebPushError::Other(format!("{:?}", e))),
         }
+    }
+}
+impl Default for WebPushClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
