@@ -24,7 +24,7 @@
 //! let content = "Encrypted payload to be sent in the notification".as_bytes();
 //! builder.set_payload(ContentEncoding::AesGcm, content);
 //!
-//! let client = WebPushClient::new();
+//! let client = BlockingWebPushClient::new();
 //!
 //! let response = client.send(builder.build()?)?;
 //! println!("Got response: {:?}", response);
@@ -47,7 +47,7 @@ mod http_ece;
 mod message;
 mod vapid;
 
-pub use crate::client::WebPushClient;
+pub use crate::client::*;
 pub use crate::error::WebPushError;
 
 pub use crate::message::{

@@ -65,6 +65,14 @@ impl From<hyper::Error> for WebPushError {
     }
 }
 
+#[cfg(feature = "hyper")]
+impl From<http::Error> for WebPushError {
+    fn from(err: http::Error) -> Self {
+        debug!("{}", err);
+        Self::Unspecified
+    }
+}
+
 #[cfg(feature = "ureq")]
 impl From<ureq::Error> for WebPushError {
     fn from(err: ureq::Error) -> Self {

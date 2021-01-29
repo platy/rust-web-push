@@ -2,9 +2,7 @@ use argparse::{ArgumentParser, Store, StoreOption};
 use std::{fs::File, io::Read};
 use web_push::*;
 
-// tokio only needed if using the feature "http-hyper", with "http-ureq" it can be removed
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     env_logger::init();
 
     let mut subscription_info_file = String::new();
@@ -71,14 +69,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         builder.set_vapid_signature(signature);
     };
 
-    let client = WebPushClient::new();
+    let client = BlockingWebPushClient::new();
 
-    let response = client.send(builder.build()?);
-
-    #[cfg(feature = "hyper")]
-    response.await?;
-    #[cfg(feature = "ureq")]
-    response?;
+    client.send(builder.build()?)?;
 
     Ok(())
 }

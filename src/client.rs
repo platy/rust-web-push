@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 #[cfg(feature = "ureq")]
 use ureq::Agent;
 
@@ -8,89 +10,106 @@ use crate::message::WebPushMessage;
 use futures::stream::StreamExt;
 #[cfg(feature = "hyper")]
 use hyper::{
-    client::{Client, HttpConnector},
-    header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER},
+    client::HttpConnector,
+    header::{CONTENT_LENGTH, RETRY_AFTER},
     Request, StatusCode,
 };
 #[cfg(feature = "hyper")]
 use hyper_tls::HttpsConnector;
 
 /// An client for sending the notification payload.
-pub struct WebPushClient {
-    #[cfg(feature = "ureq")]
-    client: Agent,
-    #[cfg(feature = "hyper")]
-    client: Client<HttpsConnector<HttpConnector>>,
+pub struct WebPushClient<Client> {
+    client: Client,
 }
 
-impl WebPushClient {
-    pub fn new() -> WebPushClient {
-        WebPushClient {
-            #[cfg(feature = "ureq")]
+impl<Client> WebPushClient<Client> {
+    fn headers(message: &WebPushMessage) -> impl IntoIterator<Item = (&'static str, Cow<'_, str>)> {
+        let ttl_header: (&'static str, Cow<'_, str>) = ("TTL", message.ttl.to_string().into());
+        if let Some(payload) = &message.payload {
+            let mut headers = vec![
+                ttl_header,
+                ("Content-Encoding", payload.content_encoding.into()),
+                (
+                    "Content-Length",
+                    format!("{}", payload.content.len() as u64).into(),
+                ),
+                ("Content-Type", "application/octet-stream".into()),
+            ];
+            headers.extend(
+                payload
+                    .crypto_headers
+                    .iter()
+                    .map(|(k, v)| (*k, Cow::Borrowed(v.as_str()))),
+            );
+            headers
+        } else {
+            vec![ttl_header]
+        }
+    }
+}
+
+/// Client for web push which blocks (using the ureq client)
+#[cfg(feature = "ureq")]
+pub type BlockingWebPushClient = WebPushClient<ureq::Agent>;
+
+#[cfg(feature = "ureq")]
+impl BlockingWebPushClient {
+    pub fn new() -> Self {
+        Self {
             client: Agent::new(),
-            #[cfg(feature = "hyper")]
-            client: Client::builder().build(HttpsConnector::new()),
         }
     }
 
-    #[cfg(feature = "ureq")]
     /// Sends a notification. Blocking. Never times out.
     pub fn send(&self, message: WebPushMessage) -> Result<(), WebPushError> {
-        let mut builder = self
-            .client
-            .post(&message.endpoint)
-            .set("TTL", &message.ttl.to_string());
+        let mut request = self.client.post(&message.endpoint);
+        for (header, value) in Self::headers(&message) {
+            request = request.set(header, &value);
+        }
 
         let body = if let Some(payload) = message.payload {
-            builder = builder
-                .set("Content-Encoding", payload.content_encoding)
-                .set(
-                    "Content-Length",
-                    &format!("{}", payload.content.len() as u64),
-                )
-                .set("Content-Type", "application/octet-stream");
-
-            for (k, v) in payload.crypto_headers.into_iter() {
-                let v: &str = v.as_ref();
-                builder = builder.set(k, v);
-            }
-
             payload.content
         } else {
             vec![]
         };
-        let response = builder.send_bytes(&body);
+        let response = request.send_bytes(&body)?;
 
         trace!("Response: {:?}", response);
         Ok(())
     }
+}
 
-    #[cfg(feature = "hyper")]
+impl Default for BlockingWebPushClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Client for web push for use in the tokio runtime (using the hyper client)
+#[cfg(feature = "hyper")]
+pub type TokioWebPushClient = WebPushClient<hyper::Client<HttpsConnector<HttpConnector>>>;
+
+#[cfg(feature = "hyper")]
+impl TokioWebPushClient {
+    pub fn new() -> Self {
+        Self {
+            client: hyper::Client::builder().build(HttpsConnector::new()),
+        }
+    }
+
     /// Sends a notification. Asynchronous. Never times out.
     pub async fn send(&self, message: WebPushMessage) -> Result<(), WebPushError> {
-        let mut builder = Request::builder()
-            .method("POST")
-            .uri(message.endpoint)
-            .header("TTL", format!("{}", message.ttl).as_bytes());
+        let mut request = Request::builder().method("POST").uri(&message.endpoint);
+        for (header, value) in Self::headers(&message) {
+            request = request.header(header, value.as_ref());
+        }
 
-        let request = if let Some(payload) = message.payload {
-            builder = builder
-                .header(CONTENT_ENCODING, payload.content_encoding)
-                .header(
-                    CONTENT_LENGTH,
-                    format!("{}", payload.content.len() as u64).as_bytes(),
-                )
-                .header(CONTENT_TYPE, "application/octet-stream");
-
-            for (k, v) in payload.crypto_headers.into_iter() {
-                let v: &str = v.as_ref();
-                builder = builder.header(k, v);
-            }
-
-            builder.body(payload.content.into()).unwrap()
+        let body = if let Some(payload) = message.payload {
+            payload.content
         } else {
-            builder.body("".into()).unwrap()
+            vec![]
         };
+        let request = request.body(body.into()).unwrap();
         trace!("request headers {:?}", request.headers());
 
         let response = self.client.request(request).await?;
@@ -146,7 +165,8 @@ impl WebPushClient {
         }
     }
 }
-impl Default for WebPushClient {
+
+impl Default for TokioWebPushClient {
     fn default() -> Self {
         Self::new()
     }

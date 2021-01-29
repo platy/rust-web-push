@@ -6,14 +6,35 @@ Rust Web Push
 
 Web push notification sender.
 
-## Requirements
+## Version 0.8
 
-MSRV??
+With version 0.8 this project has changed maintainer (thanks @pimeys), the chrome-specific handling has been removed (as the web push api is standard across browsers now), and this doesn't require tokio anymore.
 
-A feature flag needs to be selected to choose which http client to use, either:
+If you were using 0.7 the migration would be, in Cargo.toml we now use tokio version 1.1, and:
 
-- `http-hyper` - using the async `hyper` client which requires a `tokio` runtime
-- `http-ureq` - using the blocking `ureq` client which will block
+```diff
+- web-push = "0.7"
++ web-push = { version="0.8", features = ["http-hyper"], default-features = false }
+```
+
+And in the code use the tokio version of the client:
+```diff
+- web_push::WebPushClient::new()
++ web_push::TokioWebPushClient::new()
+```
+and don't set the firebase key:
+```diff
+- builder.set_gcm_key(gcm_key);
+```
+
+## Feature flags
+
+A feature flag can be used to choose which http client to use, either:
+
+- `http-hyper` - using the async `hyper` client which requires a `tokio` runtime and enables `web_push::TokioWebPushClient`
+- `http-ureq` - using the blocking `ureq` client which will block and enables `web_push::BlockingWebPushClient`
+
+Both are enabled by default.
 
 Documentation
 -------------

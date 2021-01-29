@@ -1,15 +1,15 @@
 [package]
 name = "web-push"
-description = "Web push notification client with support for http-ece encryption and VAPID authentication."
-version = "0.7.2"
-authors = ["Julius de Bruijn <julius+github@nauk.io>"]
+description = "Web push notification client with support for http-ece encryption and VAPID authentication. Can be used either blocking or async with the tokio runtime"
+version = "0.8.0"
+authors = ["Julius de Bruijn <julius+github@nauk.io>", "Mike Bush <platy@njk.onl>"]
 license = "Apache-2.0"
 homepage = "https://github.com/pimeys/rust-web-push"
 repository = "https://github.com/pimeys/rust-web-push"
 documentation = "https://docs.rs/web-push/"
 readme = "README.md"
 keywords = ["web-push", "http-ece", "vapid"]
-categories = ["web-programming", "asynchronous"]
+categories = ["web-programming", "asynchronous", "blocking"]
 edition = "2018"
 
 [badges]
@@ -30,6 +30,7 @@ lazy_static = "^1.4"
 log = "^0.4"
 ureq = { version = "2.0.1", features = ["json"], optional = true }
 url = "2.2.0"
+http = "0.2.3"
 
 [dev-dependencies]
 argparse = "0.2"
@@ -37,5 +38,6 @@ env_logger = "0.8.2"
 tokio = { version = "1.1", features = ["rt", "macros"] }
 
 [features]
+default = ["http-ureq", "http-hyper"]
 http-ureq = ["ureq"]
 http-hyper = ["futures", "hyper", "hyper-tls"]
