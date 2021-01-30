@@ -77,21 +77,37 @@ impl From<http::Error> for WebPushError {
 impl From<ureq::Error> for WebPushError {
     fn from(err: ureq::Error) -> Self {
         match err {
-            ureq::Error::Status(401, _) => WebPushError::Unauthorized,
-            ureq::Error::Status(410, _) => WebPushError::EndpointNotValid,
-            ureq::Error::Status(404, _) => WebPushError::EndpointNotFound,
-            ureq::Error::Status(413, _) => WebPushError::PayloadTooLarge,
-            ureq::Error::Status(400, response) => match response.into_json::<ErrorInfo>() {
+            ureq::Error::Status(status, response) => {
+                let retry_after = response
+                    .header("Retry-After")
+                    .and_then(retry_after_from_str);
+                Self::from_error_response(status, retry_after, || response.into_json::<ErrorInfo>())
+            }
+            err => WebPushError::Other(err.to_string()),
+        }
+    }
+}
+
+impl WebPushError {
+    pub fn from_error_response<ReadJsonError>(
+        status: u16,
+        retry_after: Option<Duration>,
+        read_body_as_error_info_json: impl FnOnce() -> Result<ErrorInfo, ReadJsonError>,
+    ) -> Self {
+        match status {
+            status if status >= 500 => WebPushError::ServerError(retry_after),
+
+            401 => WebPushError::Unauthorized,
+            410 => WebPushError::EndpointNotValid,
+            404 => WebPushError::EndpointNotFound,
+            413 => WebPushError::PayloadTooLarge,
+
+            400 => match read_body_as_error_info_json() {
                 Ok(error_info) => WebPushError::BadRequest(Some(error_info.error)),
                 Err(_) => WebPushError::BadRequest(None),
             },
-            ureq::Error::Status(code, response) if code >= 500 => {
-                let retry_after = response
-                    .header("Retry-After")
-                    .and_then(|ra| retry_after_from_str(ra));
-                WebPushError::ServerError(retry_after)
-            }
-            err => WebPushError::Other(err.to_string()),
+
+            e => WebPushError::Other(e.to_string()),
         }
     }
 }

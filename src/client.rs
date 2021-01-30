@@ -12,7 +12,7 @@ use futures::stream::StreamExt;
 use hyper::{
     client::HttpConnector,
     header::{CONTENT_LENGTH, RETRY_AFTER},
-    Request, StatusCode,
+    Request,
 };
 #[cfg(feature = "hyper")]
 use hyper_tls::HttpsConnector;
@@ -29,10 +29,7 @@ impl<Client> WebPushClient<Client> {
             let mut headers = vec![
                 ttl_header,
                 ("Content-Encoding", payload.content_encoding.into()),
-                (
-                    "Content-Length",
-                    format!("{}", payload.content.len() as u64).into(),
-                ),
+                ("Content-Length", payload.content.len().to_string().into()),
                 ("Content-Type", "application/octet-stream".into()),
             ];
             headers.extend(
@@ -79,6 +76,7 @@ impl BlockingWebPushClient {
     }
 }
 
+#[cfg(feature = "ureq")]
 impl Default for BlockingWebPushClient {
     fn default() -> Self {
         Self::new()
@@ -116,56 +114,48 @@ impl TokioWebPushClient {
 
         trace!("response status {}", response.status());
 
-        match response.status() {
-            status if status.is_success() => Ok(()),
-            status if status.is_server_error() => {
-                let retry_after = response
-                    .headers()
-                    .get(RETRY_AFTER)
-                    .and_then(|s| s.to_str().ok())
-                    .and_then(|ra| crate::error::retry_after_from_str(ra));
-                Err(WebPushError::ServerError(retry_after))
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let status = response.status().as_u16();
+            let retry_after = response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|s| s.to_str().ok())
+                .and_then(|ra| crate::error::retry_after_from_str(ra));
+
+            let content_length: usize = response
+                .headers()
+                .get(CONTENT_LENGTH)
+                .and_then(|s| s.to_str().ok())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+
+            let mut body: Vec<u8> = Vec::with_capacity(content_length);
+            let mut chunks = response.into_body();
+
+            while let Some(chunk) = chunks.next().await {
+                body.extend_from_slice(&chunk?);
             }
 
-            StatusCode::UNAUTHORIZED => Err(WebPushError::Unauthorized),
-            StatusCode::GONE => Err(WebPushError::EndpointNotValid),
-            StatusCode::NOT_FOUND => Err(WebPushError::EndpointNotFound),
-            StatusCode::PAYLOAD_TOO_LARGE => Err(WebPushError::PayloadTooLarge),
-
-            StatusCode::BAD_REQUEST => {
-                let content_length: usize = response
-                    .headers()
-                    .get(CONTENT_LENGTH)
-                    .and_then(|s| s.to_str().ok())
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-
-                let mut body: Vec<u8> = Vec::with_capacity(content_length);
-                let mut chunks = response.into_body();
-
-                while let Some(chunk) = chunks.next().await {
-                    body.extend_from_slice(&chunk?);
-                }
-
-                match String::from_utf8(body) {
+            let read_body_as_error_info_json = || match String::from_utf8(body) {
+                Err(_) => Err(WebPushError::BadRequest(None)),
+                Ok(body_str) => match serde_json::from_str::<crate::error::ErrorInfo>(&body_str) {
+                    Ok(error_info) => Ok(error_info),
                     Err(_) => Err(WebPushError::BadRequest(None)),
-                    Ok(body_str) => {
-                        match serde_json::from_str::<crate::error::ErrorInfo>(&body_str) {
-                            Ok(error_info) => Err(WebPushError::BadRequest(Some(error_info.error))),
-                            Err(_) if body_str != "" => {
-                                Err(WebPushError::BadRequest(Some(body_str)))
-                            }
-                            Err(_) => Err(WebPushError::BadRequest(None)),
-                        }
-                    }
-                }
-            }
+                },
+            };
 
-            e => Err(WebPushError::Other(format!("{:?}", e))),
+            Err(WebPushError::from_error_response(
+                status,
+                retry_after,
+                read_body_as_error_info_json,
+            ))
         }
     }
 }
 
+#[cfg(feature = "hyper")]
 impl Default for TokioWebPushClient {
     fn default() -> Self {
         Self::new()
