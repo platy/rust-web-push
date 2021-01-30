@@ -10,22 +10,16 @@ Web push notification sender.
 
 With version 0.8 this project has changed maintainer (thanks @pimeys), the chrome-specific handling has been removed (as the web push api is standard across browsers now), and this doesn't require tokio anymore.
 
-If you were using 0.7 the migration would be, in Cargo.toml we now use tokio version 1.1, and:
+If you were using 0.7 the migration would be:
+- in Cargo.toml we now use 0.8 `web-push = { version="0.8", features = ["http-hyper"], default-features = false }`
+- and tokio version 1.1,
+- in the code use the tokio version of the client `TokioWebPushClient::new()`
+- don't set the firebase key
+- also, create a key first and then use it for signing (allowing for key reuse): 
 
-```diff
-- web-push = "0.7"
-+ web-push = { version="0.8", features = ["http-hyper"], default-features = false }
-```
+[See changes in tokio example](https://github.com/pimeys/rust-web-push/compare/v0.7.2...platy:master#diff-e18ac921782c6f3a3038c9bf8dc74fdc5a8879f200f10dc20fa486cdeb2d2460)
 
-And in the code use the tokio version of the client:
-```diff
-- web_push::WebPushClient::new()
-+ web_push::TokioWebPushClient::new()
-```
-and don't set the firebase key:
-```diff
-- builder.set_gcm_key(gcm_key);
-```
+Or try the [blocking example](./examples/blocking_send.rs) with `web-push = { version="0.8", features = ["http-ureq"], default-features = false }`
 
 ## Feature flags
 

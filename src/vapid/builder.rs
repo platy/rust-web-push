@@ -1,11 +1,8 @@
-use crate::error::WebPushError;
+use super::VapidSignError;
+use super::{VapidKey, VapidSignature, VapidSigner};
 use crate::message::SubscriptionInfo;
-use crate::vapid::{VapidKey, VapidSignature, VapidSigner};
-use openssl::ec::EcKey;
-use openssl::pkey::Private;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::io::Read;
 
 /// A VAPID signature builder for generating a signature for signing a request payload.
 ///
@@ -53,50 +50,28 @@ use std::io::Read;
 ///     endpoint: String::from("https://mozilla.rules/something"),
 /// };
 ///
-/// let file = File::open("private.pem").unwrap();
+/// let key = VapidKey::from_pem(File::open("private.pem").unwrap()).unwrap();
 ///
-/// let mut sig_builder = VapidSignatureBuilder::from_pem(file, &subscription_info).unwrap();
+/// let mut sig_builder = VapidSignatureBuilder::new(&subscription_info);
 /// sig_builder.add_claim("sub", "mailto:test@example.com");
 /// sig_builder.add_claim("foo", "bar");
 /// sig_builder.add_claim("omg", 123);
 ///
-/// let signature = sig_builder.build().unwrap();
+/// let signature = sig_builder.sign(&key).unwrap();
 /// # }
 /// ```
 
 pub struct VapidSignatureBuilder<'a> {
     claims: BTreeMap<&'a str, Value>,
-    key: VapidKey,
     subscription_info: &'a SubscriptionInfo,
 }
 
 impl<'a> VapidSignatureBuilder<'a> {
-    /// Creates a new builder from a PEM formatted private key.
-    pub fn from_pem<R: Read>(
-        mut pk_pem: R,
-        subscription_info: &'a SubscriptionInfo,
-    ) -> Result<VapidSignatureBuilder<'a>, WebPushError> {
-        let mut pem_key: Vec<u8> = Vec::new();
-        pk_pem.read_to_end(&mut pem_key)?;
-
-        Ok(Self::from_ec(
-            EcKey::private_key_from_pem(&pem_key)?,
+    pub fn new(subscription_info: &'a SubscriptionInfo) -> VapidSignatureBuilder<'a> {
+        VapidSignatureBuilder {
+            claims: BTreeMap::new(),
             subscription_info,
-        ))
-    }
-
-    /// Creates a new builder from a DER formatted private key.
-    pub fn from_der<R: Read>(
-        mut pk_der: R,
-        subscription_info: &'a SubscriptionInfo,
-    ) -> Result<VapidSignatureBuilder<'a>, WebPushError> {
-        let mut der_key: Vec<u8> = Vec::new();
-        pk_der.read_to_end(&mut der_key)?;
-
-        Ok(Self::from_ec(
-            EcKey::private_key_from_der(&der_key)?,
-            subscription_info,
-        ))
+        }
     }
 
     /// Add a claim to the signature. Claims `aud` and `exp` are automatically
@@ -113,30 +88,19 @@ impl<'a> VapidSignatureBuilder<'a> {
     }
 
     /// Builds a signature to be used in [WebPushMessageBuilder](struct.WebPushMessageBuilder.html).
-    pub fn build(self) -> Result<VapidSignature, WebPushError> {
+    pub fn sign(self, key: &VapidKey) -> Result<VapidSignature, VapidSignError> {
         let endpoint = self.subscription_info.endpoint.clone();
         println!("endpoint : {}", endpoint);
-        let signature = VapidSigner::sign(self.key, &endpoint, self.claims)?;
+        let signature = VapidSigner::sign(key, &endpoint, self.claims)?;
 
         Ok(signature)
-    }
-
-    pub fn from_ec(
-        ec_key: EcKey<Private>,
-        subscription_info: &'a SubscriptionInfo,
-    ) -> VapidSignatureBuilder<'a> {
-        VapidSignatureBuilder {
-            claims: BTreeMap::new(),
-            key: VapidKey::new(ec_key),
-            subscription_info,
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::message::SubscriptionInfo;
     use crate::vapid::VapidSignatureBuilder;
+    use crate::{message::SubscriptionInfo, VapidKey};
     use serde_json;
     use std::fs::File;
 
@@ -160,8 +124,9 @@ mod tests {
 
     #[test]
     fn test_builder_from_pem() {
-        let builder = VapidSignatureBuilder::from_pem(&*PRIVATE_PEM, &*SUBSCRIPTION_INFO).unwrap();
-        let signature = builder.build().unwrap();
+        let key = VapidKey::from_pem(&*PRIVATE_PEM).unwrap();
+        let builder = VapidSignatureBuilder::new(&*SUBSCRIPTION_INFO);
+        let signature = builder.sign(&key).unwrap();
 
         assert_eq!(
             "BMo1HqKF6skMZYykrte9duqYwBD08mDQKTunRkJdD3sTJ9E-yyN6sJlPWTpKNhp-y2KeS6oANHF-q3w37bClb7U",
@@ -173,8 +138,9 @@ mod tests {
 
     #[test]
     fn test_builder_from_der() {
-        let builder = VapidSignatureBuilder::from_der(&*PRIVATE_DER, &*SUBSCRIPTION_INFO).unwrap();
-        let signature = builder.build().unwrap();
+        let key = VapidKey::from_der(&*PRIVATE_DER).unwrap();
+        let builder = VapidSignatureBuilder::new(&*SUBSCRIPTION_INFO);
+        let signature = builder.sign(&key).unwrap();
 
         assert_eq!(
             "BMo1HqKF6skMZYykrte9duqYwBD08mDQKTunRkJdD3sTJ9E-yyN6sJlPWTpKNhp-y2KeS6oANHF-q3w37bClb7U",

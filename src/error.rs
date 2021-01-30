@@ -1,10 +1,9 @@
 use base64::DecodeError;
-use openssl::error::ErrorStack;
 use ring::error;
 use serde_json::error::Error as JsonError;
 use std::string::FromUtf8Error;
 use std::time::{Duration, SystemTime};
-use std::{convert::From, error::Error, fmt, io::Error as IoError};
+use std::{convert::From, error::Error, fmt};
 
 #[derive(PartialEq, Debug)]
 pub enum WebPushError {
@@ -28,10 +27,6 @@ pub enum WebPushError {
     PayloadTooLarge,
     /// Could not initialize a TLS connection
     TlsError,
-    /// Error in SSL signing
-    SslError,
-    /// Error in reading a file
-    IoError,
     /// The TTL value provided was not valid or was not provided
     InvalidTtl,
     /// The request was missing required crypto keys
@@ -83,7 +78,7 @@ impl From<ureq::Error> for WebPushError {
                     .and_then(retry_after_from_str);
                 Self::from_error_response(status, retry_after, || response.into_json::<ErrorInfo>())
             }
-            err => WebPushError::Other(err.to_string()),
+            err => Self::Other(err.to_string()),
         }
     }
 }
@@ -95,79 +90,65 @@ impl WebPushError {
         read_body_as_error_info_json: impl FnOnce() -> Result<ErrorInfo, ReadJsonError>,
     ) -> Self {
         match status {
-            status if status >= 500 => WebPushError::ServerError(retry_after),
+            status if status >= 500 => Self::ServerError(retry_after),
 
-            401 => WebPushError::Unauthorized,
-            410 => WebPushError::EndpointNotValid,
-            404 => WebPushError::EndpointNotFound,
-            413 => WebPushError::PayloadTooLarge,
+            401 => Self::Unauthorized,
+            410 => Self::EndpointNotValid,
+            404 => Self::EndpointNotFound,
+            413 => Self::PayloadTooLarge,
 
             400 => match read_body_as_error_info_json() {
-                Ok(error_info) => WebPushError::BadRequest(Some(error_info.error)),
-                Err(_) => WebPushError::BadRequest(None),
+                Ok(error_info) => Self::BadRequest(Some(error_info.error)),
+                Err(_) => Self::BadRequest(None),
             },
 
-            e => WebPushError::Other(e.to_string()),
+            e => Self::Other(e.to_string()),
         }
     }
 }
 
 impl From<JsonError> for WebPushError {
-    fn from(_: JsonError) -> WebPushError {
-        WebPushError::InvalidResponse
+    fn from(_: JsonError) -> Self {
+        Self::InvalidResponse
     }
 }
 
 impl From<FromUtf8Error> for WebPushError {
-    fn from(_: FromUtf8Error) -> WebPushError {
-        WebPushError::InvalidResponse
+    fn from(_: FromUtf8Error) -> Self {
+        Self::InvalidResponse
     }
 }
 
 impl From<error::Unspecified> for WebPushError {
-    fn from(_: error::Unspecified) -> WebPushError {
-        WebPushError::Unspecified
-    }
-}
-
-impl From<IoError> for WebPushError {
-    fn from(_: IoError) -> WebPushError {
-        WebPushError::IoError
-    }
-}
-
-impl From<ErrorStack> for WebPushError {
-    fn from(_: ErrorStack) -> WebPushError {
-        WebPushError::SslError
+    fn from(_: error::Unspecified) -> Self {
+        Self::Unspecified
     }
 }
 
 impl From<DecodeError> for WebPushError {
-    fn from(_: DecodeError) -> WebPushError {
-        WebPushError::InvalidCryptoKeys
+    fn from(_: DecodeError) -> Self {
+        Self::InvalidCryptoKeys
     }
 }
 
 impl WebPushError {
     pub fn short_description(&self) -> &'static str {
         match *self {
-            WebPushError::Unspecified => "unspecified",
-            WebPushError::Unauthorized => "unauthorized",
-            WebPushError::BadRequest(_) => "bad_request",
-            WebPushError::ServerError(_) => "server_error",
-            WebPushError::NotImplemented => "not_implemented",
-            WebPushError::InvalidUri => "invalid_uri",
-            WebPushError::EndpointNotValid => "endpoint_not_valid",
-            WebPushError::EndpointNotFound => "endpoint_not_found",
-            WebPushError::PayloadTooLarge => "payload_too_large",
-            WebPushError::TlsError => "tls_error",
-            WebPushError::InvalidTtl => "invalid_ttl",
-            WebPushError::InvalidResponse => "invalid_response",
-            WebPushError::MissingCryptoKeys => "missing_crypto_keys",
-            WebPushError::InvalidCryptoKeys => "invalid_crypto_keys",
-            WebPushError::SslError => "ssl_error",
-            WebPushError::IoError => "io_error",
-            WebPushError::Other(_) => "other",
+            Self::Unspecified => "unspecified",
+            Self::Unauthorized => "unauthorized",
+            Self::BadRequest(_) => "bad_request",
+            Self::ServerError(_) => "server_error",
+            Self::NotImplemented => "not_implemented",
+            Self::InvalidUri => "invalid_uri",
+            Self::EndpointNotValid => "endpoint_not_valid",
+            Self::EndpointNotFound => "endpoint_not_found",
+            Self::PayloadTooLarge => "payload_too_large",
+            Self::TlsError => "tls_error",
+            Self::InvalidTtl => "invalid_ttl",
+            Self::InvalidResponse => "invalid_response",
+            Self::MissingCryptoKeys => "missing_crypto_keys",
+            Self::InvalidCryptoKeys => "invalid_crypto_keys",
+            Self::Other(_) => "other",
         }
     }
 }
@@ -175,31 +156,25 @@ impl WebPushError {
 impl Error for WebPushError {
     fn description(&self) -> &str {
         match *self {
-            WebPushError::Unspecified => "An unknown error happened encrypting the message",
-            WebPushError::Unauthorized => {
-                "Please provide valid credentials to send the notification"
-            }
-            WebPushError::BadRequest(_) => "Request was badly formed",
-            WebPushError::ServerError(_) => {
+            Self::Unspecified => "An unknown error happened encrypting the message",
+            Self::Unauthorized => "Please provide valid credentials to send the notification",
+            Self::BadRequest(_) => "Request was badly formed",
+            Self::ServerError(_) => {
                 "Server was unable to process the request, please try again later"
             }
-            WebPushError::PayloadTooLarge => "Maximum allowed payload size is 3070 characters",
-            WebPushError::InvalidUri => "The provided URI is invalid",
-            WebPushError::NotImplemented => "The feature is not implemented yet",
-            WebPushError::EndpointNotValid => {
+            Self::PayloadTooLarge => "Maximum allowed payload size is 3070 characters",
+            Self::InvalidUri => "The provided URI is invalid",
+            Self::NotImplemented => "The feature is not implemented yet",
+            Self::EndpointNotValid => {
                 "The URL specified is no longer valid and should no longer be used"
             }
-            WebPushError::EndpointNotFound => {
-                "The URL specified is invalid and should not be used again"
-            }
-            WebPushError::TlsError => "Could not initialize a TLS connection",
-            WebPushError::SslError => "Error signing with SSL",
-            WebPushError::IoError => "Error opening a file",
-            WebPushError::InvalidTtl => "The TTL value provided was not valid or was not provided",
-            WebPushError::InvalidResponse => "The response data couldn't be parses",
-            WebPushError::MissingCryptoKeys => "The request is missing cryptographic keys",
-            WebPushError::InvalidCryptoKeys => "The request is having invalid cryptographic keys",
-            WebPushError::Other(_) => "An unknown error when connecting the notification service",
+            Self::EndpointNotFound => "The URL specified is invalid and should not be used again",
+            Self::TlsError => "Could not initialize a TLS connection",
+            Self::InvalidTtl => "The TTL value provided was not valid or was not provided",
+            Self::InvalidResponse => "The response data couldn't be parses",
+            Self::MissingCryptoKeys => "The request is missing cryptographic keys",
+            Self::InvalidCryptoKeys => "The request is having invalid cryptographic keys",
+            Self::Other(_) => "An unknown error when connecting the notification service",
         }
     }
 

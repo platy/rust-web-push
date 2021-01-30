@@ -1,8 +1,7 @@
-use crate::error::WebPushError;
-use crate::vapid::VapidKey;
+use super::VapidKey;
+use super::VapidSignError;
 use base64::{self, URL_SAFE_NO_PAD};
 use openssl::hash::MessageDigest;
-use openssl::pkey::PKey;
 use openssl::sign::Signer as SslSigner;
 use serde_json::{Number, Value};
 use std::collections::BTreeMap;
@@ -42,10 +41,10 @@ impl VapidSigner {
     /// endpoint host and sets the expiry in twelve hours. Values can be
     /// overwritten by adding the `aud` and `exp` claims.
     pub fn sign(
-        key: VapidKey,
+        key: &VapidKey,
         endpoint: &str,
         mut claims: BTreeMap<&str, Value>,
-    ) -> Result<VapidSignature, WebPushError> {
+    ) -> Result<VapidSignature, VapidSignError> {
         if !claims.contains_key("aud") {
             let endpoint: Url = Url::parse(endpoint).unwrap();
             let audience = format!("{}://{}", endpoint.scheme(), endpoint.host().unwrap());
@@ -65,10 +64,9 @@ impl VapidSigner {
         );
 
         let public_key = key.public_key();
-        let auth_k = base64::encode_config(&public_key, URL_SAFE_NO_PAD);
-        let pkey = PKey::from_ec_key(key.0)?;
+        let auth_k = base64::encode_config(public_key, URL_SAFE_NO_PAD);
 
-        let mut signer = SslSigner::new(MessageDigest::sha256(), &pkey)?;
+        let mut signer = SslSigner::new(MessageDigest::sha256(), key.p_key())?;
         signer.update(signing_input.as_bytes())?;
 
         let signature = signer.sign_to_vec()?;

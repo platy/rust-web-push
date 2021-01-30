@@ -1,9 +1,14 @@
-use openssl::bn::BigNumContext;
+use std::io;
 use openssl::ec::{EcGroup, EcKey, PointConversionForm};
 use openssl::nid::Nid;
 use openssl::pkey::Private;
+use openssl::{bn::BigNumContext, error::ErrorStack as OpenSslError, pkey::PKey};
+use super::VapidKeyError;
 
-pub struct VapidKey(pub EcKey<Private>);
+pub struct VapidKey {
+    p_key: PKey<Private>,
+    public_key: Vec<u8>,
+}
 
 lazy_static! {
     static ref GROUP: EcGroup =
@@ -11,16 +16,44 @@ lazy_static! {
 }
 
 impl VapidKey {
-    pub fn new(ec_key: EcKey<Private>) -> VapidKey {
-        VapidKey(ec_key)
+    pub fn new(ec_key: EcKey<Private>) -> Result<VapidKey, OpenSslError> {
+        let mut ctx = BigNumContext::new().unwrap();
+        let key = ec_key.public_key();
+        let public_key = key
+            .to_bytes(&*GROUP, PointConversionForm::UNCOMPRESSED, &mut ctx)
+            .unwrap();
+
+        let p_key = PKey::from_ec_key(ec_key)?;
+        Ok(VapidKey {
+            p_key,
+            public_key,
+        })
     }
 
-    pub fn public_key(&self) -> Vec<u8> {
-        let mut ctx = BigNumContext::new().unwrap();
-        let key = self.0.public_key();
+    /// Creates a new key from a PEM formatted private key.
+    pub fn from_pem<R: io::Read>(mut pk_pem: R) -> Result<Self, VapidKeyError> {
+        let mut pem_key: Vec<u8> = Vec::new();
+        pk_pem.read_to_end(&mut pem_key)?; //// io error
 
-        key.to_bytes(&*GROUP, PointConversionForm::UNCOMPRESSED, &mut ctx)
-            .unwrap()
+        Ok(Self::new(
+            EcKey::private_key_from_pem(&pem_key)?, // openssl error
+        )?)
+    }
+
+    /// Creates a new key from a DER formatted private key.
+    pub fn from_der<R: io::Read>(mut pk_der: R) -> Result<Self, VapidKeyError> {
+        let mut der_key: Vec<u8> = Vec::new();
+        pk_der.read_to_end(&mut der_key)?;
+
+        Ok(Self::new(EcKey::private_key_from_der(&der_key)?)?)
+    }
+
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    pub fn p_key(&self) -> &PKey<Private> {
+        &self.p_key
     }
 }
 
@@ -38,7 +71,7 @@ mod tests {
         f.read_to_end(&mut pem_key).unwrap();
 
         let ec = EcKey::private_key_from_pem(&pem_key).unwrap();
-        let key = VapidKey::new(ec);
+        let key = VapidKey::new(ec).unwrap();
 
         assert_eq!(
             vec![

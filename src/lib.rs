@@ -55,4 +55,4 @@ pub use crate::message::{
 };
 
 pub use crate::http_ece::ContentEncoding;
-pub use crate::vapid::{VapidSignature, VapidSignatureBuilder};
+pub use crate::vapid::{VapidKey, VapidSignature, VapidSignatureBuilder};

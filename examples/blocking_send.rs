@@ -56,15 +56,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     }
 
     if let Some(ref vapid_file) = vapid_private_key {
-        let file = File::open(vapid_file).unwrap();
+        let vapid_key = VapidKey::from_pem(File::open(vapid_file).unwrap()).unwrap();
 
-        let mut sig_builder = VapidSignatureBuilder::from_pem(file, &subscription_info).unwrap();
+        let mut sig_builder = VapidSignatureBuilder::new(&subscription_info);
 
         sig_builder.add_claim("sub", "mailto:test@example.com");
         sig_builder.add_claim("foo", "bar");
         sig_builder.add_claim("omg", 123);
 
-        let signature = sig_builder.build().unwrap();
+        let signature = sig_builder.sign(&vapid_key).unwrap();
 
         builder.set_vapid_signature(signature);
     };
